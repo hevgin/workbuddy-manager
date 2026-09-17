@@ -329,18 +329,33 @@ else
   warn "服务暂未响应，查看日志：docker logs -n 50 ${CONTAINER_NAME}"
 fi
 
+DISPLAY_HOST="127.0.0.1"
+if [ "$BIND_ADDR" != "127.0.0.1" ]; then
+  LAN_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n1)"
+  [ -z "$LAN_IP" ] && LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  [ -n "$LAN_IP" ] && DISPLAY_HOST="$LAN_IP"
+fi
+
 cat <<EOF
 
   ┌──────────────────────────────────────────────────────┐
   │  部署完成                                            │
   └──────────────────────────────────────────────────────┘
 
-  管理端      http://127.0.0.1:${HOST_PORT}   （${BIND_ADDR} 监听）
+  管理端      http://${DISPLAY_HOST}:${HOST_PORT}   （${BIND_ADDR} 监听）
   上游        http://127.0.0.1:${UPSTREAM_PORT}   （workbuddy2api）
   容器名称    ${CONTAINER_NAME}
   镜像        ${IMAGE}
   数据目录    ${DATA_DIR}
 EOF
+
+if [ "$BIND_ADDR" = "127.0.0.1" ]; then
+  echo ""
+  echo "  当前只监听本机，从其他设备（如 http://192.168.1.20:${HOST_PORT}）访问会失败。"
+  echo "  开放局域网访问（脚本幂等，会重建容器，数据不丢）："
+  echo "    BIND_ADDR=0.0.0.0 sh deploy.sh"
+  echo "  若仍不通（OpenWrt / iStoreOS 常见），检查转发链：iptables -S FORWARD | grep -i docker"
+fi
 
 if [ -n "$ADMIN_PASSWORD" ]; then
   echo ""
