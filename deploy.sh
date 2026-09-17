@@ -59,6 +59,7 @@ usage() {
   --local          用当前目录源码构建镜像（需 Node.js，或已存在 web/out）
   --no-pull        本地构建时不执行 git pull
   --skip-upstream  已自备上游 workbuddy2api，跳过检测与安装
+  --lan            监听 0.0.0.0（等同 BIND_ADDR=0.0.0.0，局域网其他设备可访问）
   -h, --help       显示本帮助
 
 可用同名环境变量覆盖默认配置，常用几个：
@@ -70,6 +71,7 @@ usage() {
   HOST_PORT=8080 sh deploy.sh                       # 宿主端口改为 8080
   UPSTREAM_DIR=/srv/wb2api sh deploy.sh --skip-upstream
   NETWORK_MODE=host sh deploy.sh                    # 用宿主网络（此时通过 127.0.0.1 连上游）
+  WB_ADMIN_PASSWORD=xxx sh deploy.sh --lan          # 局域网可访问 http://<设备IP>:7864
 EOF
 }
 
@@ -78,6 +80,7 @@ while [ $# -gt 0 ]; do
     --local)   BUILD_LOCAL=1 ;;
     --no-pull) GIT_PULL=0 ;;
     --skip-upstream) SKIP_UPSTREAM=1 ;;
+    --lan)     BIND_ADDR=0.0.0.0 ;;
     -h|--help) usage; exit 0 ;;
     *) die "未知参数：$1（用 sh deploy.sh --help 查看用法）" ;;
   esac
@@ -193,6 +196,18 @@ PYEOF
   wait_upstream
 fi
 
+# 兜底：上游常只在内网里跑、没向宿主发布端口（iStoreOS / OpenWrt 上很常见）。
+# 此时让管理端容器接入上游所在网络，用容器名直连，不改动上游任何配置。
+UPSTREAM_NET=""
+if [ "$SKIP_UPSTREAM" -eq 0 ] && ! upstream_alive && docker inspect "$UPSTREAM_CONTAINER" >/dev/null 2>&1; then
+  UPSTREAM_NET="$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' \
+    "$UPSTREAM_CONTAINER" 2>/dev/null | grep -vx -e host -e none | head -n1)"
+  if [ -n "$UPSTREAM_NET" ]; then
+    warn "上游未向宿主发布 ${UPSTREAM_PORT} 端口，改用容器网络直连"
+    info "管理端将接入网络 ${UPSTREAM_NET}，上游地址 http://${UPSTREAM_CONTAINER}:${UPSTREAM_PORT}"
+  fi
+fi
+
 # ── 3/6 清理旧容器 ─────────────────────────────────────────
 step "3/6 清理旧容器"
 
@@ -252,6 +267,8 @@ fi
 # （host.docker.internal 需要 dockerd 支持 host-gateway；不支持时请用 WB_UPSTREAM_URL 显式指定）
 if [ -n "$WB_UPSTREAM_URL" ]; then
   WB2API_BASE="$WB_UPSTREAM_URL"
+elif [ -n "$UPSTREAM_NET" ] && [ "$NETWORK_MODE" != "host" ]; then
+  WB2API_BASE="http://${UPSTREAM_CONTAINER}:${UPSTREAM_PORT}"
 elif [ "$NETWORK_MODE" = "host" ]; then
   WB2API_BASE="http://127.0.0.1:${UPSTREAM_PORT}"
 else
@@ -298,6 +315,14 @@ RUN_ARGS+=("$IMAGE")
 docker run -d "${RUN_ARGS[@]}"
 ok "容器已启动（内存上限 ${MEMORY}）"
 
+if [ -n "$UPSTREAM_NET" ] && [ "$NETWORK_MODE" != "host" ]; then
+  if docker network connect "$UPSTREAM_NET" "$CONTAINER_NAME" >/dev/null 2>&1; then
+    ok "已接入上游网络 ${UPSTREAM_NET}（重跑脚本会自动重连）"
+  else
+    warn "接入网络 ${UPSTREAM_NET} 失败，手动执行：docker network connect ${UPSTREAM_NET} ${CONTAINER_NAME}"
+  fi
+fi
+
 # ── 6/6 验证 ───────────────────────────────────────────────
 step "6/6 验证"
 
@@ -320,9 +345,10 @@ if [ "$READY" -eq 1 ]; then
     info "上游连通性：${UPSTREAM_STATE}"
     if printf '%s' "$UPSTREAM_STATE" | grep -q 'upstream_ok":false'; then
       warn "容器连不上上游 ${WB2API_BASE}（常见于 dockerd 不支持 host-gateway，如 OpenWrt / iStoreOS）"
-      info "改用宿主网络：NETWORK_MODE=host sh deploy.sh"
-      info "或显式指定：WB_UPSTREAM_URL=http://<路由器IP>:${UPSTREAM_PORT} sh deploy.sh"
       info "先确认上游本身在跑：curl -s http://127.0.0.1:${UPSTREAM_PORT}/healthz"
+      info "上游只在容器网络里时：docker network connect <上游网络> ${CONTAINER_NAME}"
+      info "  并指定 WB_UPSTREAM_URL=http://${UPSTREAM_CONTAINER}:${UPSTREAM_PORT} 重跑脚本"
+      info "上游已发布端口到宿主时：NETWORK_MODE=host sh deploy.sh"
     fi
   fi
 else
@@ -353,7 +379,7 @@ if [ "$BIND_ADDR" = "127.0.0.1" ]; then
   echo ""
   echo "  当前只监听本机，从其他设备（如 http://192.168.1.20:${HOST_PORT}）访问会失败。"
   echo "  开放局域网访问（脚本幂等，会重建容器，数据不丢）："
-  echo "    BIND_ADDR=0.0.0.0 sh deploy.sh"
+  echo "    WB_ADMIN_PASSWORD='你的密码' sh deploy.sh --lan"
   echo "  若仍不通（OpenWrt / iStoreOS 常见），检查转发链：iptables -S FORWARD | grep -i docker"
 fi
 
