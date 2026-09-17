@@ -32,6 +32,10 @@ UPSTREAM_PORT="${UPSTREAM_PORT:-7863}"
 UPSTREAM_CONTAINER="${UPSTREAM_CONTAINER:-workbuddy2api}"
 UPSTREAM_DIR="${UPSTREAM_DIR:-/opt/workbuddy2api}"
 UPSTREAM_REPO="${UPSTREAM_REPO:-https://github.com/Sliverkiss/workbuddy2api.git}"
+# 容器访问上游的地址。留空 = 自动推导（host 网络用 127.0.0.1，bridge 用 host.docker.internal）
+# 若设备上的 dockerd 不支持 host-gateway（如部分 OpenWrt / iStoreOS），这里显式填宿主的
+# docker0 地址（172.17.0.1）或 LAN IP：WB2API_BASE=http://192.168.1.1:7863
+WB_UPSTREAM_URL="${WB_UPSTREAM_URL:-}"
 MEMORY="${MEMORY:-512m}"                                     # 内存上限，小内存机器可降到 256m
 NETWORK_MODE="${NETWORK_MODE:-bridge}"                       # host = 直接用宿主网络
 MOUNT_DOCKER_SOCK="${MOUNT_DOCKER_SOCK:-1}"                  # 0 = 不挂（容器内无法重载/更新上游容器）
@@ -59,7 +63,7 @@ usage() {
 
 可用同名环境变量覆盖默认配置，常用几个：
   IMAGE / LOCAL_IMAGE / CONTAINER_NAME / HOST_PORT / BIND_ADDR
-  UPSTREAM_DIR / UPSTREAM_PORT / UPSTREAM_CONTAINER / UPSTREAM_REPO
+  UPSTREAM_DIR / UPSTREAM_PORT / UPSTREAM_CONTAINER / UPSTREAM_REPO / WB_UPSTREAM_URL
   DATA_DIR / MEMORY / NETWORK_MODE / MOUNT_DOCKER_SOCK / WB_ADMIN_PASSWORD
 
 示例：
@@ -245,11 +249,15 @@ else
 fi
 
 # host 网络时容器里的 127.0.0.1 就是宿主；bridge 下靠 host-gateway 映射
-if [ "$NETWORK_MODE" = "host" ]; then
+# （host.docker.internal 需要 dockerd 支持 host-gateway；不支持时请用 WB_UPSTREAM_URL 显式指定）
+if [ -n "$WB_UPSTREAM_URL" ]; then
+  WB2API_BASE="$WB_UPSTREAM_URL"
+elif [ "$NETWORK_MODE" = "host" ]; then
   WB2API_BASE="http://127.0.0.1:${UPSTREAM_PORT}"
 else
   WB2API_BASE="http://host.docker.internal:${UPSTREAM_PORT}"
 fi
+info "容器内访问上游：${WB2API_BASE}"
 
 RUN_ARGS=(--name "$CONTAINER_NAME" --restart unless-stopped --network "$NETWORK_MODE")
 if [ "$NETWORK_MODE" != "host" ]; then
@@ -310,6 +318,12 @@ if [ "$READY" -eq 1 ]; then
   UPSTREAM_STATE="$(curl -s -m 5 "http://127.0.0.1:${HOST_PORT}/healthz" 2>/dev/null || true)"
   if [ -n "$UPSTREAM_STATE" ]; then
     info "上游连通性：${UPSTREAM_STATE}"
+    if printf '%s' "$UPSTREAM_STATE" | grep -q 'upstream_ok":false'; then
+      warn "容器连不上上游 ${WB2API_BASE}（常见于 dockerd 不支持 host-gateway，如 OpenWrt / iStoreOS）"
+      info "改用宿主网络：NETWORK_MODE=host sh deploy.sh"
+      info "或显式指定：WB_UPSTREAM_URL=http://<路由器IP>:${UPSTREAM_PORT} sh deploy.sh"
+      info "先确认上游本身在跑：curl -s http://127.0.0.1:${UPSTREAM_PORT}/healthz"
+    fi
   fi
 else
   warn "服务暂未响应，查看日志：docker logs -n 50 ${CONTAINER_NAME}"
