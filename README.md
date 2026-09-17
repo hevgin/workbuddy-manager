@@ -345,7 +345,8 @@ python -m unittest discover -s server/tests -t . -v
 
 ### 二、Docker 部署
 
-仓库自带 `Dockerfile` 与 `docker-compose.yml`，适合已经用 Docker 跑上游的用户：
+仓库自带 `Dockerfile`、`docker-compose.yml`，以及**一键脚本 `deploy.sh`**（拉官方镜像起容器，
+无需 Node.js / Python 构建环境，重复执行即更新）——适合已经用 Docker 跑上游的用户：
 
 ```bash
 git clone https://github.com/ithtelab/workbuddy-manager.git
@@ -353,6 +354,13 @@ cd workbuddy-manager
 # 按需改 compose 里的 WB2API_BASE 与卷路径（默认假设上游在 ../workbuddy2api）
 docker compose up -d --build
 docker compose logs workbuddy-manager | grep -A2 密码   # 首启随机密码
+```
+
+嫌 compose 麻烦的话，根目录还有一个一步到位的脚本（拉官方镜像、自动检测并安装上游、
+重复执行即更新，**不需要** Node.js / Python 构建环境）：
+
+```bash
+sh deploy.sh          # 全部选项与可覆盖变量见 deploy/README.md 第「零」节
 ```
 
 也可以直接用构建好的镜像（每次发版会推到 GHCR）：

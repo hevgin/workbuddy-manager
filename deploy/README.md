@@ -9,6 +9,56 @@
 
 ---
 
+## 零、只要一个容器：`deploy.sh`（Docker 一键部署 / 重新部署）
+
+如果你更习惯「一个脚本管到底」的形式（尤其面向软路由、NAS 这类设备），
+用仓库根目录的 `deploy.sh`：它拉**官方镜像**起容器，不用 Node.js、不用 Python
+构建环境，**重复执行就是更新**。
+
+```bash
+git clone https://github.com/ithtelab/workbuddy-manager.git
+cd workbuddy-manager
+sh deploy.sh                 # 首次部署
+sh deploy.sh                 # 之后随时执行 = 更新到最新版
+```
+
+脚本按 6 步执行：环境预检 → 上游 workbuddy2api（缺失则自动安装，已有则不改动
+配置与账号）→ 清理旧容器 → 拉取 / 构建镜像 → 启动容器 → 健康检查与状态输出。
+数据全在挂载的 `data/` 里，重新部署**不会丢账号、密钥、日志与用量**。
+
+| 选项 | 说明 |
+|---|---|
+| `--skip-upstream` | 已自备上游，跳过检测与安装 |
+| `--local` | 用当前目录源码构建镜像（需 Node.js 或已有 `web/out`） |
+| `--no-pull` | `--local` 时不执行 `git pull` |
+| `--help` | 查看全部可用环境变量 |
+
+常用变量（均可同名环境变量覆盖）：
+
+```bash
+HOST_PORT=8080 sh deploy.sh                        # 宿主端口改成 8080
+UPSTREAM_DIR=/srv/wb2api sh deploy.sh --skip-upstream
+MOUNT_DOCKER_SOCK=0 sh deploy.sh                   # 不挂 docker.sock（最小权限）
+WB_ADMIN_PASSWORD='强密码' sh deploy.sh             # 免查日志取随机密码
+```
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `IMAGE` | `ghcr.io/ithtelab/workbuddy-manager:latest` | 官方镜像（amd64 / arm64） |
+| `CONTAINER_NAME` | `workbuddy-manager` | 容器名 |
+| `HOST_PORT` / `BIND_ADDR` | `7864` / `127.0.0.1` | 宿主端口与绑定地址（默认仅本机） |
+| `UPSTREAM_DIR` / `UPSTREAM_PORT` | `/opt/workbuddy2api` / `7863` | 上游目录与端口 |
+| `DATA_DIR` | `<仓库目录>/data` | 数据库、日志、`users.json` |
+| `MEMORY` | `512m` | 容器内存上限 |
+| `NETWORK_MODE` | `bridge` | 改 `host` 则走宿主网络（此时以 `127.0.0.1` 连上游） |
+
+初始密码：`docker logs workbuddy-manager 2>&1 | grep -A3 '初始管理员'`。
+后续管理端与上游的升级，也可以直接在网页「设置 → 系统更新」点一下完成。
+
+> 镜像也能单独拉取：`docker pull ghcr.io/ithtelab/workbuddy-manager:latest`。
+
+---
+
 ## 一、最简单的方式：Release 包 + 一键脚本
 
 ```bash
